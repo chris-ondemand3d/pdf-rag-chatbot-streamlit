@@ -2,3 +2,7 @@ Untitled-2025-02-22-0916.excalidraw
 /venv/
 .env
 *.env
+/poppler/
+tesseract_installer.exe
+__pycache__/
+/temp/

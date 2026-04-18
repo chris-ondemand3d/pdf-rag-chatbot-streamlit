@@ -1,6 +1,6 @@
 #Import Library
 from unstructured.partition.pdf import partition_pdf
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -10,10 +10,9 @@ from langchain_postgres.vectorstores import PGVector
 from database import COLLECTION_NAME, CONNECTION_STRING
 from langchain_community.storage import RedisStore
 from langchain.schema.document import Document
-from langchain_openai import OpenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.retrievers.multi_vector import MultiVectorRetriever
 from pathlib import Path
-from IPython.display import display, HTML
 from base64 import b64decode
 import os, hashlib, shutil, uuid, json, time
 import torch, redis, streamlit as st
@@ -22,6 +21,11 @@ import logging
 
 from dotenv import load_dotenv
 load_dotenv()
+
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")
+
+POPPLER_PATH = os.path.join(os.path.dirname(__file__), "poppler", "poppler-24.08.0", "Library", "bin")
+os.environ["PATH"] = POPPLER_PATH + os.pathsep + os.environ.get("PATH", "")
 
 # Ensure PyTorch module path is correctly set
 torch.classes.__path__ = [os.path.join(torch.__path__[0], torch.classes.__file__)] 
@@ -42,8 +46,8 @@ def load_pdf_data(file_path):
         filename=file_path,
       
         infer_table_structure=True,
-        strategy = "hi_res",
-        
+        strategy="fast",
+
         extract_image_block_types = ["Image"],
         extract_image_block_to_payload  = True,
 
@@ -72,7 +76,7 @@ def summarize_text_and_tables(text, tables):
                     You are to give a concise summary of the table or text and do nothing else. 
                     Table or text chunk: {element} """
     prompt = ChatPromptTemplate.from_template(prompt_text)
-    model = ChatOpenAI(temperature=0.6, model="gpt-4o-mini")
+    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-2.5-flash")
     summarize_chain = {"element": RunnablePassthrough()}| prompt | model | StrOutputParser()
     logging.info(f"{model} done with summarization")
     return {
@@ -86,7 +90,7 @@ def initialize_retriever():
     store = RedisStore(client=client)
     id_key = "doc_id"
     vectorstore = PGVector(
-            embeddings=OpenAIEmbeddings(),
+            embeddings=GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001"),
             collection_name=COLLECTION_NAME,
             connection=CONNECTION_STRING,
             use_jsonb=True,
@@ -151,7 +155,7 @@ def chat_with_llm(retriever):
                 """
 
     prompt = ChatPromptTemplate.from_template(prompt_text)
-    model = ChatOpenAI(temperature=0.6, model="gpt-4o-mini")
+    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-2.5-flash")
  
     rag_chain = ({
        "context": retriever | RunnableLambda(parse_retriver_output), "question": RunnablePassthrough(),

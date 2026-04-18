@@ -30,4 +30,17 @@ This project implements a **Retrieval-Augmented Generation (RAG)** pipeline for 
 - **PostgreSQL + PGVector**: For embeddings storage  
 
 #### LLM
-- **GPT** (via OpenAI API or local model)
+- **Gemini 2.5 Flash** (via Google Generative AI API)
+
+---
+
+### 🔄 Modifications
+
+| Area | Original | Updated |
+|------|----------|---------|
+| LLM | `ChatOpenAI` (`gpt-4o-mini`) | `ChatGoogleGenerativeAI` (`gemini-2.5-flash`) |
+| Embeddings | `OpenAIEmbeddings` (`text-embedding-ada-002`) | `GoogleGenerativeAIEmbeddings` (`gemini-embedding-001`) |
+| PDF strategy | `hi_res` (requires Tesseract) | `fast` (no system OCR dependency) |
+| Database | `localhost:6024` (langchain user) | `localhost:5432` (postgres user) |
+| Poppler | Not bundled | Bundled in `poppler/` folder, added to PATH at runtime |
+| Dependencies removed | `nvidia-nccl-cu12`, `triton` (Linux-only) | Removed from `requirements.txt` |

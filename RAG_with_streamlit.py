@@ -184,49 +184,51 @@ def _get_file_path(file_upload):
         return file_path
     
 
-# Process uploaded PDF file
-def process_pdf(file_upload):
-    print('Processing PDF hash info...')
-    
-    file_path =  _get_file_path(file_upload)
+# Process uploaded PDF file with incremental progress updates
+def process_pdf(file_upload, progress_bar=None, status_text=None):
+
+    def update(step, total, msg):
+        if progress_bar:
+            progress_bar.progress(step / total, text=msg)
+        if status_text:
+            status_text.write(msg)
+        logging.info(msg)
+
+    update(1, 6, "📄 Saving file...")
+    file_path = _get_file_path(file_upload)
     pdf_hash = get_pdf_hash(file_path)
 
+    update(2, 6, "🔌 Connecting to vector store...")
     load_retriever = initialize_retriever()
-    existing = client.exists(f"pdf:{pdf_hash}")
-    print(f"Checking Redis for hash {pdf_hash}: {'Exists' if existing else 'Not found'}")
 
-    if existing:
-        print(f"PDF already exists with hash {pdf_hash}. Skipping upload.")
+    if client.exists(f"pdf:{pdf_hash}"):
+        update(6, 6, "✅ PDF already indexed — ready to chat!")
         return load_retriever
 
-    print(f"New PDF detected. Processing... {pdf_hash}")
- 
+    update(3, 6, "🔍 Parsing PDF into chunks...")
     pdf_elements = load_pdf_data(file_path)
-    
+
     tables = [element.metadata.text_as_html for element in
                pdf_elements if 'Table' in str(type(element))]
-    
-    text = [element.text for element in pdf_elements if 
+    text = [element.text for element in pdf_elements if
             'CompositeElement' in str(type(element))]
-   
-    summaries = summarize_text_and_tables(text, tables)
-    retriever = store_docs_in_retriever(text, summaries['text'], tables,  summaries['table'], load_retriever)
-    
-    # Store the PDF hash in Redis
-    client.set(f"pdf:{pdf_hash}", json.dumps({"text": "PDF processed"}))  
 
-    # Debug: Check if Redis stored the key
-    stored = client.exists(f"pdf:{pdf_hash}")
-    # #remove temp directory
-    # shutil.rmtree("dir")
-    print(f"Stored PDF hash in Redis: {'Success' if stored else 'Failed'}")
+    update(4, 6, f"📝 Summarizing {len(text)} text chunks and {len(tables)} tables...")
+    summaries = summarize_text_and_tables(text, tables)
+
+    update(5, 6, "💾 Indexing embeddings in vector store...")
+    retriever = store_docs_in_retriever(text, summaries['text'], tables, summaries['table'], load_retriever)
+
+    filename = file_upload.name if hasattr(file_upload, "name") else os.path.basename(file_upload)
+    client.set(f"pdf:{pdf_hash}", json.dumps({"text": "PDF processed", "filename": filename}))
+    update(6, 6, "✅ PDF fully indexed — ready to chat!")
     return retriever
 
 
 #Invoke chat with LLM based on uploaded PDF and user query
 def invoke_chat(file_upload, message):
 
-    retriever =process_pdf(file_upload)
+    retriever = st.session_state.get("retriever") or process_pdf(file_upload)
     rag_chain = chat_with_llm(retriever)
     response = rag_chain.invoke(message)
     response_placeholder = st.empty()
@@ -244,14 +246,52 @@ def main():
         st.session_state.messages = []
 
  
+    st.sidebar.markdown("### Uploaded PDFs")
+    pdf_keys = client.keys("pdf:*")
+    if pdf_keys:
+        for k in pdf_keys:
+            data = client.get(k)
+            if data:
+                info = json.loads(data)
+                filename = info.get("filename", "Unknown")
+                st.sidebar.markdown(f"- 📄 {filename}")
+    else:
+        st.sidebar.caption("No PDFs uploaded yet.")
+
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🗑️ Clear All Data", type="secondary", use_container_width=True):
+        with st.sidebar:
+            with st.spinner("Clearing Redis and PGVector..."):
+                client.flushdb()
+                retriever = initialize_retriever()
+                retriever.vectorstore.delete_collection()
+            st.session_state["retriever"] = None
+            st.session_state["processed_file_id"] = None
+            st.sidebar.success("✅ All data cleared.")
+            st.rerun()
+
+    st.sidebar.markdown("---")
     file_upload = st.sidebar.file_uploader(
-    label="Upload", type=["pdf"], 
-    accept_multiple_files=False,
-    key="pdf_uploader"
+        label="Upload PDF", type=["pdf"],
+        accept_multiple_files=False,
+        key="pdf_uploader"
     )
 
-    if file_upload:     
-        st.success("File uploaded successfully! You can now ask your question.")
+    if file_upload:
+        file_id = f"{file_upload.name}_{file_upload.size}"
+        if st.session_state.get("processed_file_id") != file_id:
+            st.session_state["processed_file_id"] = file_id
+            st.session_state["retriever"] = None
+            with st.sidebar:
+                status_text = st.empty()
+                progress_bar = st.progress(0, text="Starting...")
+                try:
+                    retriever = process_pdf(file_upload, progress_bar, status_text)
+                    st.session_state["retriever"] = retriever
+                except Exception as e:
+                    st.error(f"Error processing PDF: {e}")
+        else:
+            st.sidebar.success("✅ PDF ready — ask your question!")
 
     # Prompt for user input
     if prompt := st.chat_input("Your question"):

@@ -69,19 +69,34 @@ def get_pdf_hash(pdf_path):
     return hashlib.sha256(pdf_bytes).hexdigest()
 
 # Summarize extracted text and tables using LLM
-def summarize_text_and_tables(text, tables):
+def summarize_text_and_tables(text, tables, status_text=None):
     logging.info("Ready to summarize data with LLM")
     prompt_text = """You are an assistant tasked with summarizing text and tables. \
-    
-                    You are to give a concise summary of the table or text and do nothing else. 
+
+                    You are to give a concise summary of the table or text and do nothing else.
                     Table or text chunk: {element} """
     prompt = ChatPromptTemplate.from_template(prompt_text)
-    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-2.5-flash")
-    summarize_chain = {"element": RunnablePassthrough()}| prompt | model | StrOutputParser()
-    logging.info(f"{model} done with summarization")
+    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-3-flash-preview")
+    summarize_chain = (
+        {"element": RunnablePassthrough()}
+        | prompt
+        | model.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
+        | StrOutputParser()
+    )
+
+    def summarize_with_progress(items, label):
+        results = []
+        for i, item in enumerate(items):
+            if status_text:
+                status_text.write(f"📝 Summarizing {label} {i+1}/{len(items)}...")
+            logging.info(f"Summarizing {label} {i+1}/{len(items)}")
+            results.append(summarize_chain.invoke(item))
+            time.sleep(1)
+        return results
+
     return {
-        "text": summarize_chain.batch(text, {"max_concurrency": 5}),
-        "table": summarize_chain.batch(tables, {"max_concurrency": 5})
+        "text": summarize_with_progress(text, "text chunk"),
+        "table": summarize_with_progress(tables, "table"),
     }
   
 #Initialize a pgvector and retriever for storing and searching documents
@@ -155,7 +170,7 @@ def chat_with_llm(retriever):
                 """
 
     prompt = ChatPromptTemplate.from_template(prompt_text)
-    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-2.5-flash")
+    model = ChatGoogleGenerativeAI(temperature=0.6, model="gemini-3-flash-preview")
  
     rag_chain = ({
        "context": retriever | RunnableLambda(parse_retriver_output), "question": RunnablePassthrough(),
@@ -214,7 +229,7 @@ def process_pdf(file_upload, progress_bar=None, status_text=None):
             'CompositeElement' in str(type(element))]
 
     update(4, 6, f"📝 Summarizing {len(text)} text chunks and {len(tables)} tables...")
-    summaries = summarize_text_and_tables(text, tables)
+    summaries = summarize_text_and_tables(text, tables, status_text)
 
     update(5, 6, "💾 Indexing embeddings in vector store...")
     retriever = store_docs_in_retriever(text, summaries['text'], tables, summaries['table'], load_retriever)
@@ -290,6 +305,14 @@ def main():
                     st.session_state["retriever"] = retriever
                 except Exception as e:
                     st.error(f"Error processing PDF: {e}")
+
+            # if st.session_state.get("retriever"):
+            #     with st.chat_message("assistant"):
+            #         with st.spinner("Generating document summary..."):
+            #             rag_chain = chat_with_llm(st.session_state["retriever"])
+            #             summary = rag_chain.invoke("What is this document about?")
+            #         st.session_state.messages.append({"role": "assistant", "content": summary})
+            #         st.write(summary)
         else:
             st.sidebar.success("✅ PDF ready — ask your question!")
 
